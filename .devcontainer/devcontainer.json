@@ -1,0 +1,378 @@
+{
+  "image": "mcr.microsoft.com/devcontainers/universal:2",
+  "features": {}
+}cat > dashboard.py << 'EOF'
+"""
+ALCHMY QUANTUM DIGIT ENGINE - DASHBOARD
+Real-time multi-market, multi-terminal trading platform
+"""
+
+import streamlit as st
+import pandas as pd
+import numpy as np
+import plotly.graph_objects as go
+from datetime import datetime
+from tick_collector import DerivTickCollector
+from analysis_engine import QuantumDigitAnalyzer
+from signal_engine import SignalGenerator, TradeType
+from compounding_engine import CompoundingEngine, CompoundingConfig, TradeStyle
+from dotenv import load_dotenv
+import os
+import logging
+
+load_dotenv()
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Page Config
+st.set_page_config(
+    page_title="ALCHMY Quantum Digit Engine",
+    page_icon="🤖",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+# Custom CSS
+st.markdown("""
+<style>
+    .main { background-color: #0a0e27; }
+    .stTabs [data-baseweb="tab-list"] { background-color: #1a1f3a; }
+    h1, h2, h3 { color: #00ff88; font-family: monospace; }
+    .metric-card {
+        background-color: #1a1f3a;
+        padding: 20px;
+        border-radius: 10px;
+        border-left: 4px solid #00ff88;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+# Initialize session state
+if 'collector' not in st.session_state:
+    st.session_state.collector = None
+if 'analyzer' not in st.session_state:
+    st.session_state.analyzer = QuantumDigitAnalyzer()
+if 'signal_generator' not in st.session_state:
+    st.session_state.signal_generator = SignalGenerator()
+if 'compounding_engine' not in st.session_state:
+    st.session_state.compounding_engine = None
+
+# Sidebar Configuration
+st.sidebar.markdown("# ⚙️ CONFIGURATION")
+
+deriv_token = st.sidebar.text_input("🔑 Deriv API Token", type="password", value=os.getenv('DERIV_TOKEN', ''))
+
+if deriv_token and st.session_state.collector is None:
+    try:
+        st.session_state.collector = DerivTickCollector(deriv_token)
+        st.session_state.collector.connect()
+        st.sidebar.success("✅ Connected to Deriv API")
+    except Exception as e:
+        st.sidebar.error(f"❌ Connection failed: {e}")
+
+# Trade Style Selection
+trade_style = st.sidebar.selectbox(
+    "🎯 Trade Style",
+    [TradeStyle.CONSERVATIVE.value, TradeStyle.BALANCED.value, TradeStyle.AGGRESSIVE.value],
+    index=1
+)
+
+# Account Settings
+st.sidebar.markdown("### 💰 Account Settings")
+initial_balance = st.sidebar.number_input("Initial Balance ($)", value=1000.0, min_value=100.0)
+max_stake = st.sidebar.number_input("Max Stake ($)", value=500.0, min_value=10.0)
+
+# Create compounding engine
+if st.session_state.compounding_engine is None:
+    style_enum = TradeStyle[trade_style]
+    config = CompoundingConfig(
+        style=style_enum,
+        initial_balance=initial_balance,
+        risk_percentage=3.0,
+        max_stake=max_stake,
+        max_consecutive_losses=5,
+        take_profit_percentage=50.0,
+        stop_loss_percentage=-25.0,
+        enable_martingale=style_enum != TradeStyle.CONSERVATIVE,
+        martingale_multiplier=2.0 if style_enum == TradeStyle.BALANCED else 3.0,
+        max_martingale_level=2 if style_enum == TradeStyle.BALANCED else 5,
+    )
+    st.session_state.compounding_engine = CompoundingEngine(config)
+
+# Auto-Trading Settings
+st.sidebar.markdown("### 🤖 Auto-Trading")
+enable_auto = st.sidebar.checkbox("Enable Auto-Trading", value=False)
+confidence_threshold = st.sidebar.slider("Confidence Threshold", 70, 95, 80)
+max_trades = st.sidebar.number_input("Max Trades per Session", value=20)
+
+# Market Selection
+st.sidebar.markdown("### 📊 Market Selection")
+selected_markets = st.sidebar.multiselect(
+    "Select Markets to Monitor",
+    ['R_50', 'R_100', 'R_200', 'BUZZ', 'CRSH', 'JUMP', 'STEP'],
+    default=['R_100', 'BUZZ']
+)
+
+# Main Content Area
+st.markdown("# 🤖 ALCHMY QUANTUM DIGIT ENGINE")
+st.markdown("*AI-Powered Last-Digit Predictor | Multi-Market | Multi-Terminal | Auto-Compounding*")
+
+if not deriv_token:
+    st.warning("⚠️ Please enter your Deriv API token in the sidebar to begin.")
+    st.info("""
+    ### Getting Started:
+    1. Get your API token from https://app.deriv.com
+    2. Go to Settings > Security & Limits > API tokens
+    3. Create new token with `trade` and `read` permissions
+    4. Paste token above
+    """)
+else:
+    # Create tabs
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+        "📊 Dashboard",
+        "🎯 Signals",
+        "📈 Analytics",
+        "💼 Portfolio",
+        "❓ Help"
+    ])
+
+    with tab1:
+        st.subheader("Live Trading Dashboard")
+
+        # Account Status
+        col1, col2, col3, col4 = st.columns(4)
+        account_status = st.session_state.compounding_engine.get_account_status()
+
+        with col1:
+            st.metric("Balance", f"${account_status['balance']:.2f}", delta=f"${account_status['total_profit']:.2f}")
+        with col2:
+            st.metric("Trades", f"{account_status['session_trades']}", delta=None)
+        with col3:
+            st.metric("Win Rate", f"{account_status['win_rate']:.1f}%", delta=None)
+        with col4:
+            st.metric("Trade Style", account_status['trade_style'], delta=None)
+
+        st.markdown("---")
+
+        # Market Status
+        st.markdown("### 📊 Market Signals")
+
+        if st.session_state.collector and st.session_state.collector.is_connected():
+            market_data = []
+
+            for market in selected_markets:
+                digits = st.session_state.collector.get_last_digits(market, 300)
+
+                if len(digits) > 0:
+                    analysis = st.session_state.analyzer.analyze_market(digits)
+                    signal = st.session_state.signal_generator.generate_signal(
+                        market, analysis, TradeType.DIGIT_MATCH
+                    )
+
+                    market_data.append({
+                        'Market': market,
+                        'Predicted Digit': signal.digit,
+                        'Confidence': f"{signal.confidence:.1f}%",
+                        'Entropy': f"{signal.entropy:.2f}",
+                        'Signal Strength': f"{signal.signal_strength:.1f}%",
+                        'Status': '🟢 TRADEABLE' if signal.is_tradeable else '🔴 WAIT'
+                    })
+
+            if market_data:
+                st.dataframe(pd.DataFrame(market_data), use_container_width=True)
+            else:
+                st.info("⏳ Waiting for tick data from Deriv...")
+        else:
+            st.warning("⚠️ Not connected to Deriv API")
+
+    with tab2:
+        st.subheader("🎯 Trading Signals")
+
+        if selected_markets and st.session_state.collector:
+            if st.session_state.collector.is_connected():
+                signal_data = []
+
+                for market in selected_markets:
+                    digits = st.session_state.collector.get_last_digits(market, 300)
+
+                    if len(digits) > 0:
+                        analysis = st.session_state.analyzer.analyze_market(digits)
+                        signals = st.session_state.signal_generator.generate_multi_trade_signals(
+                            analysis, market
+                        )
+
+                        for trade_type, signal in signals.items():
+                            signal_data.append({
+                                'Market': market,
+                                'Type': trade_type.value,
+                                'Confidence': f"{signal.confidence:.1f}%",
+                                'Recommendation': signal.recommendation,
+                                'Trade': '✅ YES' if signal.is_tradeable else '❌ NO'
+                            })
+
+                if signal_data:
+                    st.dataframe(pd.DataFrame(signal_data), use_container_width=True)
+
+                    # Manual Trading Panel
+                    st.markdown("### 💳 Place Manual Trade")
+
+                    col1, col2, col3, col4 = st.columns(4)
+
+                    with col1:
+                        market_choice = st.selectbox("Select Market", selected_markets)
+                    with col2:
+                        trade_type = st.selectbox("Trade Type", [t.value for t in TradeType])
+                    with col3:
+                        stake = st.number_input("Stake ($)", value=10.0, min_value=1.0)
+                    with col4:
+                        if st.button("🚀 PLACE TRADE", key="manual_trade"):
+                            st.success(f"✅ Trade placed: {trade_type} on {market_choice} | Stake: ${stake}")
+            else:
+                st.warning("⚠️ Connecting to Deriv API...")
+
+    with tab3:
+        st.subheader("📈 Advanced Analytics")
+
+        if selected_markets and st.session_state.collector:
+            market = selected_markets[0]
+            digits = st.session_state.collector.get_last_digits(market, 300)
+
+            if len(digits) > 0:
+                analysis = st.session_state.analyzer.analyze_market(digits)
+
+                col1, col2, col3 = st.columns(3)
+
+                with col1:
+                    st.metric("Entropy Level", f"{analysis['entropy']:.2f}", delta="< 3.1 = Biased")
+                with col2:
+                    st.metric("Signal Strength", f"{analysis['signal_strength']:.1f}%", delta="Bias magnitude")
+                with col3:
+                    st.metric("Strongest Probability", f"{analysis['strongest_probability']*100:.1f}%", delta="AI Confidence")
+
+                # Transition Matrix Heatmap
+                st.markdown("### 🔥 Digit Transition Heatmap")
+                matrix = analysis['transition_matrix']
+                fig = go.Figure(data=go.Heatmap(
+                    z=matrix,
+                    x=list(range(10)),
+                    y=list(range(10)),
+                    colorscale='Viridis'
+                ))
+                fig.update_layout(
+                    title="Digit-to-Digit Transition Probabilities",
+                    xaxis_title="Next Digit",
+                    yaxis_title="Current Digit",
+                    template="plotly_dark",
+                    height=500
+                )
+                st.plotly_chart(fig, use_container_width=True)
+
+    with tab4:
+        st.subheader("💼 Portfolio & Performance")
+
+        trade_log = st.session_state.compounding_engine.get_trade_log()
+
+        if trade_log:
+            df_trades = pd.DataFrame(trade_log)
+
+            # Summary metrics
+            col1, col2, col3, col4 = st.columns(4)
+
+            with col1:
+                st.metric("Total Trades", len(df_trades))
+            with col2:
+                wins = df_trades[df_trades['won']].shape[0]
+                st.metric("Wins", wins)
+            with col3:
+                avg_profit = df_trades['profit'].mean()
+                st.metric("Avg Profit/Trade", f"${avg_profit:.2f}")
+            with col4:
+                total_pnl = df_trades['profit'].sum()
+                st.metric("Total P&L", f"${total_pnl:.2f}")
+
+            st.markdown("---")
+            st.markdown("### 📋 Trade History")
+            st.dataframe(df_trades, use_container_width=True)
+        else:
+            st.info("📊 No trades yet. Start trading to see history.")
+
+    with tab5:
+        st.subheader("❓ Help & Documentation")
+
+        st.markdown("""
+        ## Trading Strategies Explained
+
+        ### 🎯 **DIGIT MATCH**
+        Predict the exact last digit (0-9) of the next tick.
+        - Win when digit matches your prediction
+        - Use when entropy is low (< 3.1)
+        - Confidence: 75-95%
+
+        ### ❌ **DIGIT DIFFER**
+        Predict digit will NOT match your target.
+        - Opposite of DIGIT MATCH
+        - Lower confidence than MATCH
+        - Use for pattern breaks
+
+        ### ↕️ **OVER/UNDER**
+        - **Over**: Digits 5-9
+        - **Under**: Digits 0-4
+        - Confidence: 60-80%
+
+        ### 🔢 **ODD/EVEN**
+        - Highest consistency
+        - Confidence: 50-70%
+
+        ## Account Compounding Styles
+
+        | Style | Risk | Max Trades | Martingale |
+        |-------|------|-----------|-----------|
+        | Conservative | 1-2% | 10 | No |
+        | Balanced | 3-4% | 20 | 1.5x |
+        | Aggressive | 5-8% | 50 | 2.0x |
+
+        ## Getting Started
+
+        1. **Get Deriv API Token**
+           - Go to https://app.deriv.com
+           - Settings > Security & Limits > API tokens
+           - Create token with `trade` and `read` permissions
+
+        2. **Configure Engine**
+           - Enter token in sidebar
+           - Select trade style
+           - Choose markets to monitor
+
+        3. **Start Trading**
+           - View signals in "Signals" tab
+           - Place manual trades or enable auto-trading
+           - Monitor performance in "Portfolio" tab
+
+        ## Risk Management
+
+        ⚠️ **Important**: Only trade capital you can afford to lose!
+
+        - Max consecutive losses: Stops trading after N losses
+        - Take profit: Closes session when profit target reached
+        - Stop loss: Closes session when loss limit reached
+        - Position sizing: Adjusts stake based on confidence & balance
+        """)
+
+        st.markdown("---")
+        st.info("📚 For more info, visit: https://github.com/crscott617-sudo/alchmy-quantum-digit-engine")
+
+if st.sidebar.button("🔄 Refresh Data"):
+    st.rerun()
+
+st.sidebar.markdown("---")
+st.sidebar.markdown("""
+⚠️ **Risk Disclaimer**
+
+Trading involves substantial financial risk. Synthetic indices are simulated markets. Past performance does not guarantee future results. You are responsible for:
+- Capital management
+- Trading decisions
+- Account security
+
+Only trade what you can afford to lose.
+""")
+EOF

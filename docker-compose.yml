@@ -1,0 +1,13 @@
+version: '3.8'
+
+services:
+  streamlit:
+    image: python:3.8
+    volumes:
+      - .:/app
+    working_dir: /app
+    ports:
+      - "8501:8501"
+    command: [ "streamlit", "run", "your_script.py" ]
+    environment:
+      - PYTHONUNBUFFERED=1
